@@ -15,6 +15,10 @@
  */
 package com.google.idea.blaze.base;
 
+import com.google.idea.blaze.base.bazel.BuildSystemProvider;
+import com.google.idea.blaze.base.bazel.FakeBuildSystem;
+import com.google.idea.blaze.base.bazel.FakeBuildSystemProvider;
+import com.google.idea.blaze.base.settings.BuildSystemName;
 import com.intellij.mock.MockComponentManager;
 import com.intellij.mock.MockProject;
 import com.intellij.openapi.Disposable;
@@ -95,6 +99,13 @@ public class BlazeTestCase {
     MockProject mockProject = TestUtils.mockProject(applicationContainer, testDisposable);
 
     extensionsArea = (ExtensionsAreaImpl) Extensions.getRootArea();
+
+    registerExtensionPoint(BuildSystemProvider.EP_NAME, BuildSystemProvider.class)
+        .registerExtension(
+            FakeBuildSystemProvider.builder()
+                .setBuildSystem(FakeBuildSystem.builder(BuildSystemName.Bazel).build())
+                .build(),
+            testDisposable);
 
     this.project = mockProject;
 
