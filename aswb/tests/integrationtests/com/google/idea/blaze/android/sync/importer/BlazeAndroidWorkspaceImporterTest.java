@@ -188,11 +188,13 @@ public class BlazeAndroidWorkspaceImporterTest extends BlazeTestCase {
     registerExtensionPoint(JavaLikeLanguage.EP_NAME, JavaLikeLanguage.class)
         .registerExtension(new JavaLikeLanguage.Java());
 
-    registerExtensionPoint(BuildSystemProvider.EP_NAME, BuildSystemProvider.class)
-        .registerExtension(new BazelBuildSystemProvider());
-
     applicationServices.register(
         RemoteArtifactPrefetcher.class, new MockRemoteArtifactPrefetcher());
+  }
+
+  @Override
+  protected BuildSystemProvider createBuildSystemProvider() {
+    return new BazelBuildSystemProvider();
   }
 
   private BlazeAndroidImportResult importWorkspace(
@@ -485,7 +487,7 @@ public class BlazeAndroidWorkspaceImporterTest extends BlazeTestCase {
     List<BlazeJarLibrary> jars = Lists.newArrayList();
     List<BlazeJarLibrary> genJars = Lists.newArrayList();
     ImportRoots importRoots =
-        ImportRoots.builder(workspaceRoot, BuildSystemName.Blaze)
+        ImportRoots.builder(workspaceRoot, getBuildSystemProvider())
             .add(ProjectViewSet.builder().add(projectView).build())
             .build();
     ProjectViewSet projectViewSet = ProjectViewSet.builder().add(projectView).build();
