@@ -42,6 +42,7 @@ java_library(
         "//proto:proto_deps",
         "//sdkcompat",
         "//third_party/auto_value",
+        "@error_prone_annotations//jar",
     ],
 )
 
