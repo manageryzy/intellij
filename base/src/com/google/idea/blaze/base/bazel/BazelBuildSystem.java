@@ -37,11 +37,12 @@ import javax.annotation.Nullable;
 
 class BazelBuildSystem implements BuildSystem {
 
-  static class BazelInvoker implements BuildInvoker {
+  class BazelInvoker extends AbstractBuildInvoker {
     private final String path;
     private final BlazeCommandRunner runner = new CommandLineBlazeCommandRunner();
 
-    public BazelInvoker(String path) {
+    public BazelInvoker(Project project, BlazeContext blazeContext, String path) {
+      super(project, blazeContext);
       this.path = path;
     }
 
@@ -58,6 +59,11 @@ class BazelBuildSystem implements BuildSystem {
     @Override
     public boolean supportsParallelism() {
       return false;
+    }
+
+    @Override
+    protected BuildSystem getBuildSystem() {
+      return BazelBuildSystem.this;
     }
 
     @Override
@@ -78,7 +84,7 @@ class BazelBuildSystem implements BuildSystem {
   }
 
   @Override
-  public BuildInvoker getBuildInvoker(Project project) {
+  public BuildInvoker getBuildInvoker(Project project, BlazeContext context) {
     String binaryPath;
     File projectSpecificBinary = getProjectSpecificBazelBinary(project);
     if (projectSpecificBinary != null) {
@@ -87,7 +93,7 @@ class BazelBuildSystem implements BuildSystem {
       BlazeUserSettings settings = BlazeUserSettings.getInstance();
       binaryPath = settings.getBazelBinaryPath();
     }
-    return new BazelInvoker(binaryPath);
+    return new BazelInvoker(project, context, binaryPath);
   }
 
   @Override
