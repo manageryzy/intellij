@@ -17,6 +17,7 @@ package com.google.idea.blaze.java.libraries;
 
 import static com.google.common.truth.Truth.assertThat;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Arrays.stream;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -67,6 +68,8 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.io.Writer;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.Rule;
@@ -81,9 +84,12 @@ public class JarCacheTest extends BlazeTestCase {
   @Rule public TemporaryFolder folder = new TemporaryFolder();
   private WorkspaceRoot workspaceRoot;
   private BlazeContext context;
+  private Container applicationServices;
+  private static final String PLUGIN_PROCESSOR_JAR = "pluginProcessor.jar";
 
   @Override
   protected void initTest(Container applicationServices, Container projectServices) {
+    this.applicationServices = applicationServices;
     context = new BlazeContext();
     context.addOutputSink(PrintOutput.class, new WritingOutputSink());
     workspaceRoot = new WorkspaceRoot(folder.getRoot());
@@ -131,7 +137,7 @@ public class JarCacheTest extends BlazeTestCase {
   }
 
   @Test
-  public void refresh_fllSync_localArtifact_lintJarCached() throws IOException {
+  public void refresh_fullSync_localArtifact_lintJarCached() throws IOException {
     ArtifactLocationDecoder localArtifactLocationDecoder =
         new MockArtifactLocationDecoder(workspaceRoot.directory(), /* isRemote= */ false);
     testRefreshLintJarCached(localArtifactLocationDecoder, SyncMode.FULL);
@@ -152,20 +158,25 @@ public class JarCacheTest extends BlazeTestCase {
   }
 
   /**
-   * This test sets up blaze project data with a single java import result. It verifies that when
-   * the file caches are refreshed, the jar cache correctly caches the lint jars.
+   * Create a test project that has store jar in {@code PluginProcessorJars} of {@code
+   * BlazeJavaImportResult}
    */
-  private void testRefreshLintJarCached(ArtifactLocationDecoder decoder, SyncMode syncMode)
+  private BlazeProjectData setupProjectWithLintRuleJar(File jar, ArtifactLocationDecoder decoder)
       throws IOException {
-    // arrange: set up a project that have PluginProcessorJars
-    String pluginProcessorJar = "pluginProcessor.jar";
-    File jar = workspaceRoot.fileForPath(new WorkspacePath(pluginProcessorJar));
+
     try (ZipOutputStream zo = new ZipOutputStream(new FileOutputStream(jar))) {
       zo.putNextEntry(new ZipEntry("com/google/foo/gen/Gen.java"));
       zo.write("package gen; class Gen {}".getBytes(UTF_8));
       zo.closeEntry();
     }
-    ArtifactLocation lintJarArtifactLocation = generateArtifactLocation(pluginProcessorJar);
+
+    ArtifactLocation lintJarArtifactLocation =
+        ArtifactLocation.builder()
+            .setRootExecutionPathFragment(workspaceRoot.directory().getAbsolutePath())
+            .setRelativePath(PLUGIN_PROCESSOR_JAR)
+            .setIsSource(false)
+            .build();
+
     LibraryArtifact libraryArtifact =
         LibraryArtifact.builder().setInterfaceJar(lintJarArtifactLocation).build();
 
@@ -181,14 +192,78 @@ public class JarCacheTest extends BlazeTestCase {
             .build();
     BlazeJavaSyncData syncData =
         new BlazeJavaSyncData(importResult, new GlobSet(ImmutableList.of()));
-    BlazeProjectData blazeProjectData =
-        MockBlazeProjectDataBuilder.builder(workspaceRoot)
-            .setWorkspaceLanguageSettings(
-                new WorkspaceLanguageSettings(
-                    WorkspaceType.JAVA, ImmutableSet.of(LanguageClass.JAVA)))
-            .setSyncState(new SyncState.Builder().put(syncData).build())
-            .setArtifactLocationDecoder(decoder)
-            .build();
+    return MockBlazeProjectDataBuilder.builder(workspaceRoot)
+        .setWorkspaceLanguageSettings(
+            new WorkspaceLanguageSettings(WorkspaceType.JAVA, ImmutableSet.of(LanguageClass.JAVA)))
+        .setSyncState(new SyncState.Builder().put(syncData).build())
+        .setArtifactLocationDecoder(decoder)
+        .build();
+  }
+
+  /**
+   * This test sets up blaze project data with a single java import result. It verifies that when
+   * the file caches are refreshed, the jar cache correctly caches the lint jars and repackaged.
+   * Since repackager function does not use sync mode or artifact decoder, so only test in one mode.
+   */
+  @Test
+  public void refresh_lintJarRepackaged() throws IOException {
+    ArtifactLocationDecoder artifactLocationDecoder =
+        new MockArtifactLocationDecoder(workspaceRoot.directory(), /* isRemote= */ true);
+    // arrange: set up a project that have PluginProcessorJars and register a fake repackager that
+    // will repackage jars
+    applicationServices.register(JarRepackager.class, new FakeJarRepackager());
+    File jar = workspaceRoot.fileForPath(new WorkspacePath(PLUGIN_PROCESSOR_JAR));
+    BlazeProjectData blazeProjectData = setupProjectWithLintRuleJar(jar, artifactLocationDecoder);
+
+    // act: refresh all the file caches, which in turn will fetch the plugin processor jar to local
+    // and use FakeJarRepackager to repackage it
+    FileCache.EP_NAME
+        .extensions()
+        .forEach(
+            ep ->
+                ep.onSync(
+                    getProject(),
+                    context,
+                    ProjectViewSet.builder().add(ProjectView.builder().build()).build(),
+                    blazeProjectData,
+                    null,
+                    SyncMode.FULL));
+
+    // assert: verify that the plugin processor jar was extracted from the cache and repackaged.
+    // One has the name that starts with FakeJarRepackager.PREFIX. Both of them should exist in
+    // cache and have correct content.
+    File cacheDir = JarCacheFolderProvider.getInstance(project).getJarCacheFolder();
+    File[] files = cacheDir.listFiles();
+
+    assertThat(files).hasLength(2);
+    assertThat(
+            stream(files)
+                .filter(
+                    file ->
+                        file.getName().startsWith(FakeJarRepackager.PREFIX)
+                            && new File(
+                                    cacheDir,
+                                    JarRepackager.getInstance().getOriginalJarName(file.getName()))
+                                .exists())
+                .count())
+        .isEqualTo(1);
+
+    for (File file : files) {
+      byte[] actualJarContent = Files.readAllBytes(file.toPath());
+      byte[] expectedJarContent = Files.readAllBytes(jar.toPath());
+      assertThat(actualJarContent).isEqualTo(expectedJarContent);
+    }
+  }
+
+  /**
+   * This test sets up blaze project data with a single java import result. It verifies that when
+   * the file caches are refreshed, the jar cache correctly caches the lint jars.
+   */
+  private void testRefreshLintJarCached(ArtifactLocationDecoder decoder, SyncMode syncMode)
+      throws IOException {
+    // arrange: set up a project that have PluginProcessorJars
+    File jar = workspaceRoot.fileForPath(new WorkspacePath(PLUGIN_PROCESSOR_JAR));
+    BlazeProjectData blazeProjectData = setupProjectWithLintRuleJar(jar, decoder);
 
     // act: refresh all the file caches, which in turn will fetch the plugin processor jar to local
     FileCache.EP_NAME
@@ -212,15 +287,7 @@ public class JarCacheTest extends BlazeTestCase {
     byte[] expectedJarContent = Files.readAllBytes(jar.toPath());
     assertThat(actualJarContent).isEqualTo(expectedJarContent);
   }
-
-  private ArtifactLocation generateArtifactLocation(String relativePath) {
-    return ArtifactLocation.builder()
-        .setRootExecutionPathFragment(workspaceRoot.directory().getAbsolutePath())
-        .setRelativePath(relativePath)
-        .setIsSource(false)
-        .build();
-  }
-
+  
   private static class WritingOutputSink implements OutputSink<PrintOutput> {
 
     private final Writer writer = new StringWriter();
@@ -234,6 +301,30 @@ public class JarCacheTest extends BlazeTestCase {
         throw new RuntimeException(e);
       }
     }
+  }
 
+  private static class FakeJarRepackager implements JarRepackager {
+    public static final String PREFIX = "repackaged_";
+
+    @Override
+    public String getRepackagedJarName(String originalJarName) {
+      return PREFIX + originalJarName;
+    }
+
+    @Override
+    public String getOriginalJarName(String repackagedJarName) {
+      return repackagedJarName.substring(repackagedJarName.indexOf(PREFIX));
+    }
+
+    @Override
+    public void processJar(File jar) throws IOException {
+      Path source = jar.toPath();
+      Path destination = source.resolveSibling(PREFIX);
+      Files.copy(
+          source,
+          destination,
+          StandardCopyOption.REPLACE_EXISTING,
+          StandardCopyOption.COPY_ATTRIBUTES);
+    }
   }
 }

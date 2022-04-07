@@ -193,7 +193,11 @@ public class JarCache {
       if (removeMissingFiles) {
         removed =
             cachedFiles.entrySet().stream()
-                .filter(e -> !projectState.containsKey(e.getKey()))
+                .filter(
+                    e ->
+                        !projectState.containsKey(e.getKey())
+                            && !projectState.containsKey(
+                                JarRepackager.getInstance().getOriginalJarName(e.getKey())))
                 .map(Map.Entry::getValue)
                 .collect(toImmutableList());
       }
@@ -210,7 +214,9 @@ public class JarCache {
           .run();
 
       // update cache files, and remove files if required
-      List<ListenableFuture<?>> futures = new ArrayList<>(copyLocally(updated));
+      ImmutableList<BlazeArtifact> lintJars = LintJarHelper.collectLintJarsArtifacts(projectData);
+      List<ListenableFuture<?>> futures =
+          new ArrayList<>(copyAndRepackageLocally(updated, lintJars));
       if (removeMissingFiles) {
         futures.addAll(deleteCacheFiles(removed));
       }
@@ -272,27 +278,40 @@ public class JarCache {
         newOutputs.put(cacheKeyForSourceJar(srcJar), srcJar);
       }
     }
-    JavaLintCollector.collectLintJarsArtifacts(projectData)
+    LintJarHelper.collectLintJarsArtifacts(projectData)
         .forEach(jar -> newOutputs.put(cacheKeyForJar(jar), jar));
 
     return ImmutableMap.copyOf(newOutputs);
   }
 
-  private Collection<ListenableFuture<?>> copyLocally(Map<String, BlazeArtifact> updated) {
+  private List<ListenableFuture<?>> copyAndRepackageLocally(
+      Map<String, BlazeArtifact> updated, List<BlazeArtifact> lintJars) {
     List<ListenableFuture<?>> futures = new ArrayList<>();
     updated.forEach(
         (key, artifact) ->
             futures.add(
                 FetchExecutor.EXECUTOR.submit(
                     () -> {
+                      File destination = jarCacheFolderProvider.getCacheFileByKey(key);
                       try {
-                        copyLocally(artifact, jarCacheFolderProvider.getCacheFileByKey(key));
+                        copyLocally(artifact, destination);
                       } catch (IOException e) {
                         logger.warn(
                             String.format(
-                                "Fail to copy artifact %s to %s",
+                                "Failed to copy artifact %s to %s",
                                 artifact, jarCacheFolderProvider.getJarCacheFolder().getPath()),
                             e);
+                      }
+                      if (lintJars.contains(artifact)) {
+                        try {
+                          JarRepackager.getInstance().processJar(destination);
+                        } catch (IOException | InterruptedException e) {
+                          logger.warn(
+                              String.format(
+                                  "Failed to repackage artifact %s to %s",
+                                  artifact, jarCacheFolderProvider.getJarCacheFolder().getPath()),
+                              e);
+                        }
                       }
                     })));
     return futures;

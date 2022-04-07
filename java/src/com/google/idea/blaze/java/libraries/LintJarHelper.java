@@ -20,15 +20,11 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import com.google.common.collect.ImmutableList;
 import com.google.idea.blaze.base.command.buildresult.BlazeArtifact;
 import com.google.idea.blaze.base.model.BlazeProjectData;
-import com.google.idea.blaze.base.sync.libraries.LintCollector;
 import com.google.idea.blaze.base.sync.workspace.ArtifactLocationDecoder;
 import com.google.idea.blaze.java.sync.model.BlazeJavaSyncData;
-import com.intellij.openapi.project.Project;
-import java.io.File;
 
-/** {@inheritDoc} Collecting lint rule jars from {@code BlazeJavaSyncData} */
-public class JavaLintCollector implements LintCollector {
-
+/** Utility class for collecting lint jars from {@code BlazeProjectData} */
+public final class LintJarHelper {
   public static ImmutableList<BlazeArtifact> collectLintJarsArtifacts(
       BlazeProjectData blazeProjectData) {
     BlazeJavaSyncData syncData = blazeProjectData.getSyncState().get(BlazeJavaSyncData.class);
@@ -42,11 +38,5 @@ public class JavaLintCollector implements LintCollector {
         .collect(toImmutableList());
   }
 
-  @Override
-  public ImmutableList<File> collectLintJars(Project project, BlazeProjectData blazeProjectData) {
-    JarCache jarCache = JarCache.getInstance(project);
-    return collectLintJarsArtifacts(blazeProjectData).stream()
-        .map(jarCache::getCachedJar)
-        .collect(toImmutableList());
-  }
+  private LintJarHelper() {}
 }
