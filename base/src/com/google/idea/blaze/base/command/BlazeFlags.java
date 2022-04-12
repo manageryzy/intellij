@@ -22,13 +22,19 @@ import com.google.idea.blaze.base.projectview.ProjectViewSet;
 import com.google.idea.blaze.base.projectview.section.sections.BuildFlagsSection;
 import com.google.idea.blaze.base.projectview.section.sections.SyncFlagsSection;
 import com.google.idea.blaze.base.projectview.section.sections.TestFlagsSection;
+import com.google.idea.common.experiments.BoolExperiment;
 import com.intellij.execution.configurations.ParametersList;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.util.PlatformUtils;
 import java.util.List;
 
 /** The collection of all the Bazel flag strings we use. */
 public final class BlazeFlags {
+  // Enables auto-setting fat_apk_cpu=x86_64 flag for sync
+  private static final BoolExperiment forceFatApkCpuExperiment =
+      new BoolExperiment("blaze.sync.flags.enableForceFatApkCpuExperiment", true);
+  private static final Logger logger = Logger.getInstance(BlazeFlags.class);
   // Build the maximum number of possible dependencies of the project and to show all the build
   // errors in single go.
   public static final String KEEP_GOING = "--keep_going";
@@ -70,7 +76,25 @@ public final class BlazeFlags {
     }
     flags.addAll(expandBuildFlags(projectViewSet.listItems(BuildFlagsSection.KEY)));
     if (context.type() == ContextType.Sync) {
-      flags.addAll(expandBuildFlags(projectViewSet.listItems(SyncFlagsSection.KEY)));
+      List<String> syncOnlyFlags =
+          BlazeFlags.expandBuildFlags(projectViewSet.listItems(SyncFlagsSection.KEY));
+      flags.addAll(syncOnlyFlags);
+      if (forceFatApkCpuExperiment.getValue()) {
+        // Set --fat_apk_cpu=x86_64 when it is not already set
+        boolean isFatApkCpuFlagPresent =
+            syncOnlyFlags.stream().anyMatch(flag -> flag.contains("fat_apk_cpu"));
+        if (!isFatApkCpuFlagPresent) {
+          flags.add("--fat_apk_cpu=x86_64");
+          logger.info(
+              "Blaze sync process, unlike the build/install, does not require separate builds for"
+                  + " every environment, its dependency resolution mechanism is independent of"
+                  + " environments. So explicitly setting the sync_flags to a single cpu build"
+                  + " (x86_64) saves computation resources and makes sync faster!.\n"
+                  + "If you wish to disable this feature set the experiment to false ("
+                  + "`blaze.sync.flags.enableForceFatApkCpuExperiment=0`) in"
+                  + " ~/.intellij-experiments file.");
+        }
+      }
     }
     if (BlazeCommandName.TEST.equals(command)) {
       flags.addAll(expandBuildFlags(projectViewSet.listItems(TestFlagsSection.KEY)));
