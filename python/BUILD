@@ -31,6 +31,8 @@ java_library(
         "//proto:proto_deps",
         "//sdkcompat",
         "//third_party/python",
+        "//common/settings",
+        "//common/util:platform"
     ],
 )
 

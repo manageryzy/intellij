@@ -22,6 +22,7 @@ import com.intellij.openapi.projectRoots.Sdk;
 import com.intellij.openapi.projectRoots.impl.SdkConfigurationUtil;
 import com.jetbrains.python.sdk.PythonSdkType;
 import com.jetbrains.python.sdk.PythonSdkUtil;
+
 import javax.annotation.Nullable;
 
 /** Extension to allow suggestion of Python SDK to use for a particular project */
@@ -56,7 +57,18 @@ public abstract class PySdkSuggester {
     if (sdk != null) {
       return false;
     }
-    return SdkConfigurationUtil.createAndAddSDK(homePath, PythonSdkType.getInstance()) != null;
+    return createSdk(project, version, homePath) != null;
+  }
+
+  /**
+   * Interface to create custom sdk
+   *
+   * @param homePath path for sdk home
+   * @return Sdk
+   */
+  @Nullable
+  protected Sdk createSdk(Project project, PythonVersion version, String homePath) {
+    return SdkConfigurationUtil.createAndAddSDK(homePath, PythonSdkType.getInstance());
   }
 
   /**
